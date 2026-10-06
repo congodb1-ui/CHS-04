@@ -293,6 +293,7 @@ export interface InspectionItem {
   activity: string;
   status: string;
   remarks: string;
+  photoUrl?: string;
 }
 
 export interface DailyInspectionReport {
@@ -306,6 +307,8 @@ export interface DailyInspectionReport {
   isVerified: boolean;
   submittedAt?: string;
   verifiedAt?: string;
+  sitePhotos?: string[];
+  pdfReportUrl?: string;
 }
 
 export interface AmenityBooking {

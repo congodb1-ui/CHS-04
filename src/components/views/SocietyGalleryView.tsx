@@ -66,6 +66,7 @@ export const SocietyGalleryView: React.FC = () => {
 
   // Upload Processing States
   const [isProcessingFile, setIsProcessingFile] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [formFeedback, setFormFeedback] = useState<string | null>(null);
@@ -149,7 +150,15 @@ export const SocietyGalleryView: React.FC = () => {
     const file = e.target.files?.[0];
     if (file) {
       processFile(file);
+      if (!title.trim()) {
+        const cleanName = file.name
+          .replace(/\.[^/.]+$/, '')
+          .replace(/[-_]+/g, ' ')
+          .replace(/\b\w/g, (c) => c.toUpperCase());
+        setTitle(cleanName);
+      }
     }
+    e.target.value = '';
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -168,6 +177,13 @@ export const SocietyGalleryView: React.FC = () => {
     const file = e.dataTransfer.files?.[0];
     if (file) {
       processFile(file);
+      if (!title.trim()) {
+        const cleanName = file.name
+          .replace(/\.[^/.]+$/, '')
+          .replace(/[-_]+/g, ' ')
+          .replace(/\b\w/g, (c) => c.toUpperCase());
+        setTitle(cleanName);
+      }
     }
   };
 
@@ -184,6 +200,7 @@ export const SocietyGalleryView: React.FC = () => {
       return;
     }
 
+    setIsSaving(true);
     try {
       if (editingItem) {
         await updateGalleryItem(editingItem.id, {
@@ -222,6 +239,8 @@ export const SocietyGalleryView: React.FC = () => {
       setTimeout(() => setFeedbackMsg(null), 4000);
     } catch (err: any) {
       setUploadError(err?.message || 'Failed to save photo updates.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -694,31 +713,43 @@ export const SocietyGalleryView: React.FC = () => {
 
                 {/* MODE 1: File Upload & Drag-and-drop */}
                 {inputMode === 'upload' && (
-                  <div
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                    onClick={() => fileInputRef.current?.click()}
-                    className={`p-6 border-2 border-dashed rounded-xl flex flex-col items-center justify-center text-center cursor-pointer transition-colors ${
-                      isDragging
-                        ? 'border-teal-600 bg-teal-50/60'
-                        : 'border-slate-300 hover:border-teal-600 bg-white'
-                    }`}
-                  >
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/*"
-                      onChange={handleImageFileInput}
-                      className="hidden"
-                    />
-                    <Upload className="w-6 h-6 text-teal-600 mb-2" />
-                    <p className="font-bold text-slate-800">
-                      {isProcessingFile ? 'Optimizing photo...' : 'Click to choose image or drag & drop'}
-                    </p>
-                    <p className="text-[11px] text-slate-500 mt-0.5">
-                      Accepts JPG, PNG, WebP (auto-compressed for fast loading)
-                    </p>
+                  <div className="space-y-2">
+                    <div
+                      onDragOver={handleDragOver}
+                      onDragLeave={handleDragLeave}
+                      onDrop={handleDrop}
+                      onClick={() => fileInputRef.current?.click()}
+                      className={`p-6 border-2 border-dashed rounded-xl flex flex-col items-center justify-center text-center cursor-pointer transition-colors ${
+                        isDragging
+                          ? 'border-teal-600 bg-teal-50/60'
+                          : 'border-slate-300 hover:border-teal-600 bg-white'
+                      }`}
+                    >
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={handleImageFileInput}
+                        className="hidden"
+                      />
+                      <Upload className="w-6 h-6 text-teal-600 mb-2" />
+                      <p className="font-bold text-slate-800">
+                        {isProcessingFile ? 'Optimizing photo...' : imageUrl ? 'Click or drag to choose a replacement photo' : 'Click to choose image or drag & drop'}
+                      </p>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Accepts JPG, PNG, WebP (auto-compressed for rapid loading)
+                      </p>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          fileInputRef.current?.click();
+                        }}
+                        className="mt-3 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-xs"
+                      >
+                        {imageUrl ? 'Browse New Photo' : 'Select Photo File'}
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -778,16 +809,26 @@ export const SocietyGalleryView: React.FC = () => {
                 {imageUrl && (
                   <div className="mt-2 space-y-1.5">
                     <div className="flex items-center justify-between text-[11px] text-slate-600">
-                      <span className="font-semibold">Active Preview:</span>
-                      <button
-                        type="button"
-                        onClick={() => setImageUrl('')}
-                        className="text-red-600 hover:underline cursor-pointer"
-                      >
-                        Remove
-                      </button>
+                      <span className="font-semibold text-slate-800">Selected Photo Preview:</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="text-teal-700 hover:underline cursor-pointer font-medium"
+                        >
+                          Change Photo
+                        </button>
+                        <span>&middot;</span>
+                        <button
+                          type="button"
+                          onClick={() => setImageUrl('')}
+                          className="text-red-600 hover:underline cursor-pointer font-medium"
+                        >
+                          Remove
+                        </button>
+                      </div>
                     </div>
-                    <div className="relative w-full h-36 rounded-xl overflow-hidden border border-slate-300 bg-slate-950">
+                    <div className="relative w-full h-40 rounded-xl overflow-hidden border border-slate-300 bg-slate-950">
                       <img
                         src={imageUrl}
                         alt="Photo preview"
@@ -809,11 +850,17 @@ export const SocietyGalleryView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={isProcessingFile}
+                  disabled={isProcessingFile || isSaving}
                   className="px-5 py-2 bg-teal-700 hover:bg-teal-800 disabled:opacity-60 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-all flex items-center gap-1.5"
                 >
-                  <Check className="w-3.5 h-3.5" />
-                  <span>{editingItem ? 'Save Updates' : 'Add to Gallery'}</span>
+                  {isSaving ? (
+                    <span>Saving Photo...</span>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>{editingItem ? 'Save Photo Changes' : 'Upload to Gallery'}</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

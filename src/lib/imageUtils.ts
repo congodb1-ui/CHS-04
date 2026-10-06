@@ -63,6 +63,12 @@ export async function compressImageFile(
           return;
         }
 
+        // Fill with white background for JPEG compression to avoid black background on transparent PNGs
+        if (mimeType === 'image/jpeg') {
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, width, height);
+        }
+
         // Apply clean image smoothing
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
@@ -72,7 +78,8 @@ export async function compressImageFile(
 
         // Convert to optimized data URL
         try {
-          const compressedDataUrl = canvas.toDataURL(mimeType, quality);
+          const targetMime = file.type === 'image/webp' ? 'image/webp' : mimeType;
+          const compressedDataUrl = canvas.toDataURL(targetMime, quality);
           resolve(compressedDataUrl);
         } catch {
           resolve(event.target?.result as string);

@@ -26,7 +26,9 @@ import {
   Layers,
   Edit2,
   Trash2,
+  Upload,
 } from 'lucide-react';
+import { compressImageFile } from '../../lib/imageUtils';
 import { TowerId, UserRole, ROLE_LABELS, MemberProfile } from '../../types';
 
 export const ResidentRegistryView: React.FC = () => {
@@ -998,21 +1000,54 @@ export const ResidentRegistryView: React.FC = () => {
                 <label className="font-semibold text-slate-700 block mb-1">
                   Profile Photo (Optional)
                 </label>
-                <div className="flex items-center gap-3">
-                  {editForm.avatarUrl ? (
-                    <img
-                      src={editForm.avatarUrl}
-                      alt="Avatar Preview"
-                      className="w-10 h-10 rounded-full object-cover border border-slate-300 shrink-0"
-                    />
-                  ) : (
-                    <div className="w-10 h-10 rounded-full bg-slate-100 text-slate-500 font-bold text-xs flex items-center justify-center border border-slate-300 shrink-0">
-                      {editForm.name ? editForm.name.slice(0, 2).toUpperCase() : 'U'}
-                    </div>
-                  )}
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    {editForm.avatarUrl ? (
+                      <div className="relative w-12 h-12 rounded-full overflow-hidden border-2 border-teal-600 shrink-0">
+                        <img
+                          src={editForm.avatarUrl}
+                          alt="Avatar Preview"
+                          className="w-full h-full object-cover"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setEditForm({ ...editForm, avatarUrl: '' })}
+                          className="absolute inset-0 bg-black/40 text-white flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity cursor-pointer"
+                          title="Remove photo"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-500 font-bold text-xs flex items-center justify-center border border-slate-300 shrink-0">
+                        {editForm.name ? editForm.name.slice(0, 2).toUpperCase() : 'U'}
+                      </div>
+                    )}
+                    <label className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 cursor-pointer shadow-2xs transition-colors shrink-0">
+                      <Upload className="w-3.5 h-3.5 text-teal-700" />
+                      <span>Upload Photo</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            try {
+                              const compressed = await compressImageFile(file, { maxWidth: 600, maxHeight: 600, quality: 0.85 });
+                              setEditForm({ ...editForm, avatarUrl: compressed });
+                            } catch (err) {
+                              console.warn('Failed to compress avatar photo:', err);
+                            }
+                          }
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
+                  </div>
                   <input
-                    type="url"
-                    placeholder="Image URL (https://...)"
+                    type="text"
+                    placeholder="Or paste image URL (https://...)"
                     value={editForm.avatarUrl || ''}
                     onChange={(e) => setEditForm({ ...editForm, avatarUrl: e.target.value })}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 font-medium focus:outline-teal-700 bg-white text-xs"

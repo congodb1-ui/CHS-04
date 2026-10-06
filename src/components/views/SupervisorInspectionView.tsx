@@ -27,7 +27,7 @@ import {
   Loader2,
   Server,
 } from 'lucide-react';
-import { AttendanceCode, StaffMember } from '../../types';
+import { AttendanceCode, StaffMember, InspectionItem } from '../../types';
 import {
   fetchInspectionByDay,
   fetchAttendanceByDay,
@@ -46,6 +46,9 @@ export const SupervisorInspectionView: React.FC = () => {
     syncInspectionReport,
     syncDayAttendance,
     updateInspectionItem,
+    addInspectionItem,
+    editInspectionItem,
+    removeInspectionItem,
     submitInspection,
     verifyInspection,
     staffList,
@@ -75,6 +78,17 @@ export const SupervisorInspectionView: React.FC = () => {
   const [isBulkMarking, setIsBulkMarking] = useState<boolean>(false);
   const [isDbSyncing, setIsDbSyncing] = useState<boolean>(false);
 
+  // Checklist Item Management State
+  const [showChecklistModal, setShowChecklistModal] = useState<boolean>(false);
+  const [editingChecklistItem, setEditingChecklistItem] = useState<InspectionItem | null>(null);
+  const [checklistActivity, setChecklistActivity] = useState<string>('');
+  const [checklistCategory, setChecklistCategory] = useState<string>('UTILITIES & INFRASTRUCTURE');
+  const [checklistStatus, setChecklistStatus] = useState<string>('Working OK');
+  const [checklistRemarks, setChecklistRemarks] = useState<string>('');
+  const [applyChecklistToAllDays, setApplyChecklistToAllDays] = useState<boolean>(false);
+  const [checklistItemToDelete, setChecklistItemToDelete] = useState<InspectionItem | null>(null);
+  const [deleteItemFromAllDays, setDeleteItemFromAllDays] = useState<boolean>(false);
+
   // Staff Modal Management State
   const [showStaffModal, setShowStaffModal] = useState<boolean>(false);
   const [editingStaffSrNo, setEditingStaffSrNo] = useState<number | null>(null);
@@ -84,6 +98,9 @@ export const SupervisorInspectionView: React.FC = () => {
   const [staffShift, setStaffShift] = useState<string>('General Shift (08:00 - 17:00)');
   const [staffStatus, setStaffStatus] = useState<'Active' | 'On Leave' | 'Reliever'>('Active');
   const [staffModalSuccess, setStaffModalSuccess] = useState<string | null>(null);
+
+  // Staff Deletion Confirmation State
+  const [staffToDelete, setStaffToDelete] = useState<StaffMember | null>(null);
 
   // Current calendar day constraint (Day of month, e.g. Oct 5)
   const currentCalendarDay = Math.min(new Date().getDate(), 31);
@@ -153,6 +170,89 @@ export const SupervisorInspectionView: React.FC = () => {
   const handleEscalate = (item: typeof currentReport.items[0]) => {
     const tktId = escalateChecklistToTicket(item.id, item.activity, item.remarks);
     setEscalatedMap((prev) => ({ ...prev, [item.id]: tktId }));
+  };
+
+  const openAddChecklistItem = () => {
+    setEditingChecklistItem(null);
+    setChecklistActivity('');
+    setChecklistCategory(categoryFilter === 'All' ? 'UTILITIES & INFRASTRUCTURE' : (categoryFilter as any));
+    setChecklistStatus('Working OK');
+    setChecklistRemarks('');
+    setApplyChecklistToAllDays(true);
+    setShowChecklistModal(true);
+  };
+
+  const openEditChecklistItem = (item: InspectionItem) => {
+    setEditingChecklistItem(item);
+    setChecklistActivity(item.activity);
+    setChecklistCategory(item.category);
+    setChecklistStatus(item.status);
+    setChecklistRemarks(item.remarks || '');
+    setApplyChecklistToAllDays(false);
+    setShowChecklistModal(true);
+  };
+
+  const handleSaveChecklistItem = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!checklistActivity.trim()) return;
+
+    if (editingChecklistItem) {
+      editInspectionItem(
+        selectedInspectionDay,
+        editingChecklistItem.id,
+        {
+          activity: checklistActivity.trim(),
+          category: checklistCategory as any,
+          status: checklistStatus,
+          remarks: checklistRemarks,
+        },
+        applyChecklistToAllDays
+      );
+      setSyncStatus(`✓ Modified checklist item #${editingChecklistItem.id}: "${checklistActivity.trim()}" (${applyChecklistToAllDays ? 'all 31 days' : `Day ${selectedInspectionDay}`})`);
+    } else {
+      addInspectionItem(
+        selectedInspectionDay,
+        {
+          activity: checklistActivity.trim(),
+          category: checklistCategory as any,
+          status: checklistStatus,
+          remarks: checklistRemarks,
+        },
+        applyChecklistToAllDays
+      );
+      setSyncStatus(`✓ Added new checklist item: "${checklistActivity.trim()}" (${applyChecklistToAllDays ? 'all 31 days' : `Day ${selectedInspectionDay}`})`);
+    }
+
+    setShowChecklistModal(false);
+    setEditingChecklistItem(null);
+    setTimeout(() => setSyncStatus(null), 5000);
+  };
+
+  const confirmDeleteChecklistItem = () => {
+    if (!checklistItemToDelete) return;
+    removeInspectionItem(selectedInspectionDay, checklistItemToDelete.id, deleteItemFromAllDays);
+    setSyncStatus(`✓ Removed checklist item #${checklistItemToDelete.id} (${deleteItemFromAllDays ? 'all 31 days' : `Day ${selectedInspectionDay}`})`);
+    setChecklistItemToDelete(null);
+    setTimeout(() => setSyncStatus(null), 5000);
+  };
+
+  const openEditStaffMember = (staff: StaffMember) => {
+    setEditingStaffSrNo(staff.srNo);
+    setStaffName(staff.name);
+    setStaffTeam(staff.team);
+    setStaffRole(staff.role);
+    setStaffShift(staff.shift);
+    setStaffStatus(staff.status as any);
+    setStaffModalSuccess(null);
+    setShowStaffModal(true);
+  };
+
+  const confirmDeleteStaffMember = () => {
+    if (!staffToDelete) return;
+    deleteStaffMember(staffToDelete.srNo);
+    setSyncStatus(`✓ Removed staff member #${staffToDelete.srNo} (${staffToDelete.name}) from roster.`);
+    setStaffToDelete(null);
+    setTimeout(() => setSyncStatus(null), 5000);
   };
 
   // Persists item changes to state and Supabase operations schema
@@ -544,7 +644,7 @@ export const SupervisorInspectionView: React.FC = () => {
             </div>
           </div>
 
-          {/* Category Filter Pills */}
+          {/* Category Filter Pills & Add Checklist Item Button */}
           <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-1.5">
               {[
@@ -563,17 +663,21 @@ export const SupervisorInspectionView: React.FC = () => {
                       : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                   }`}
                 >
-                  {cat === 'All' ? 'All 33 Checkpoints' : cat}
+                  {cat === 'All' ? `All Checkpoints (${currentReport.items.length})` : cat}
                 </button>
               ))}
             </div>
 
-            <div className="text-xs text-slate-500">
-              {role === 'supervisor' ? (
-                <span className="font-semibold text-teal-700">Supervisor Edit Mode (Parvez)</span>
-              ) : (
-                <span>Logged as: <strong>{role.toUpperCase()}</strong></span>
-              )}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={openAddChecklistItem}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-teal-700 hover:bg-teal-800 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                title="Add a new custom checklist point to daily inspections"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Add Checklist Item</span>
+              </button>
             </div>
           </div>
 
@@ -588,6 +692,7 @@ export const SupervisorInspectionView: React.FC = () => {
                     <th className="py-2.5 px-3 w-48">Status / Observation</th>
                     <th className="py-2.5 px-3 min-w-[200px]">Comments / Remarks</th>
                     <th className="py-2.5 px-3 text-right">Committee Action</th>
+                    <th className="py-2.5 px-3 text-center w-28">Admin Controls</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -690,6 +795,29 @@ export const SupervisorInspectionView: React.FC = () => {
                           ) : (
                             <span className="text-slate-400 text-[11px]">Normal</span>
                           )}
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <div className="inline-flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => openEditChecklistItem(item)}
+                              className="p-1.5 text-slate-600 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer"
+                              title="Modify Checklist Item (Title, Category, Status)"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setChecklistItemToDelete(item);
+                                setDeleteItemFromAllDays(false);
+                              }}
+                              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                              title="Delete Checklist Item"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -896,6 +1024,7 @@ export const SupervisorInspectionView: React.FC = () => {
                   <th className="py-2.5 px-3">Designation / Role</th>
                   <th className="py-2.5 px-3">Shift Timings</th>
                   <th className="py-2.5 px-3 text-center">Day {selectedInspectionDay} Status</th>
+                  <th className="py-2.5 px-3 text-center w-28">Staff Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -975,6 +1104,26 @@ export const SupervisorInspectionView: React.FC = () => {
                             : 'Not Marked'}
                         </span>
                       )}
+                    </td>
+                    <td className="py-2.5 px-3 text-center">
+                      <div className="inline-flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => openEditStaffMember(staff)}
+                          className="p-1.5 text-slate-600 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer"
+                          title={`Modify name or designation for ${staff.name}`}
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setStaffToDelete(staff)}
+                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                          title={`Remove ${staff.name} from staff roster`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1145,10 +1294,10 @@ export const SupervisorInspectionView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => {
-                      if (confirm(`Remove staff member #${editingStaffSrNo} from the roster?`)) {
-                        deleteStaffMember(editingStaffSrNo);
+                      const staff = staffList.find((s) => s.srNo === editingStaffSrNo);
+                      if (staff) {
                         setShowStaffModal(false);
-                        setEditingStaffSrNo(null);
+                        setStaffToDelete(staff);
                       }
                     }}
                     className="px-3 py-1.5 text-xs text-red-600 hover:text-red-700 font-semibold cursor-pointer"
@@ -1176,6 +1325,238 @@ export const SupervisorInspectionView: React.FC = () => {
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* CHECKLIST ITEM MANAGEMENT MODAL (ADD / MODIFY) */}
+      {showChecklistModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-xs p-4 overflow-y-auto animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-xl w-full p-6 space-y-4 my-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-teal-700 text-white rounded-xl">
+                  <ClipboardCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-slate-900">
+                    {editingChecklistItem ? `Modify Checklist Item #${editingChecklistItem.id}` : 'Add New Checklist Point'}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Daily Facility Supervisor Walkthrough Standard · Kool Homes Solitaire CHS
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowChecklistModal(false);
+                  setEditingChecklistItem(null);
+                }}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveChecklistItem} className="space-y-4 text-xs">
+              <div>
+                <label className="font-semibold text-slate-800 block mb-1">
+                  Inspection Activity / Checkpoint Description <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Swimming Pool Filtration & Chlorination Level Check"
+                  value={checklistActivity}
+                  onChange={(e) => setChecklistActivity(e.target.value)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-medium focus:bg-white focus:outline-teal-700"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-semibold text-slate-800 block mb-1">Category <span className="text-red-500">*</span></label>
+                  <select
+                    value={checklistCategory}
+                    onChange={(e) => setChecklistCategory(e.target.value)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-medium focus:bg-white focus:outline-teal-700"
+                  >
+                    <option value="UTILITIES & INFRASTRUCTURE">UTILITIES & INFRASTRUCTURE</option>
+                    <option value="CLEANING & HYGIENE">CLEANING & HYGIENE</option>
+                    <option value="LIGHTS & SECURITY">LIGHTS & SECURITY</option>
+                    <option value="RENOVATION & MAINTENANCE">RENOVATION & MAINTENANCE</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="font-semibold text-slate-800 block mb-1">Status / Observation</label>
+                  <select
+                    value={checklistStatus}
+                    onChange={(e) => setChecklistStatus(e.target.value)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-medium focus:bg-white focus:outline-teal-700"
+                  >
+                    <option value="Working OK">Working OK</option>
+                    <option value="Cleaned & Swept">Cleaned & Swept</option>
+                    <option value="Full (100%)">Full (100%)</option>
+                    <option value="Adequate (>75%)">Adequate (&gt;75%)</option>
+                    <option value="Collected On Time">Collected On Time</option>
+                    <option value="No Leakage (OK)">No Leakage (OK)</option>
+                    <option value="Action Required">Action Required</option>
+                    <option value="Not Working">Not Working</option>
+                    <option value="Bulbs Blown / Replaced">Bulbs Blown / Replaced</option>
+                    <option value="Blurry / Adjust Lens">Blurry / Adjust Lens</option>
+                    <option value="No Violations">No Violations</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-800 block mb-1">Defect Remarks / Observations (Optional)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Pump running at 2.4 bar pressure. No leakage found."
+                  value={checklistRemarks}
+                  onChange={(e) => setChecklistRemarks(e.target.value)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-medium focus:bg-white focus:outline-teal-700"
+                />
+              </div>
+
+              {/* Template Scope Toggle */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                <span className="font-bold text-slate-800 block text-xs">Scope of Application:</span>
+                <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={applyChecklistToAllDays}
+                    onChange={(e) => setApplyChecklistToAllDays(e.target.checked)}
+                    className="w-4 h-4 rounded text-teal-700 focus:ring-teal-500"
+                  />
+                  <span>Apply changes to all 31 days (Daily Inspection Template)</span>
+                </label>
+                <p className="text-[11px] text-slate-500 pl-6">
+                  {applyChecklistToAllDays
+                    ? 'This checklist checkpoint will be added / updated across all 31 days of the month and persisted in Supabase.'
+                    : `Only applies to Day ${selectedInspectionDay}. Other days will remain unchanged.`}
+                </p>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowChecklistModal(false);
+                    setEditingChecklistItem(null);
+                  }}
+                  className="px-4 py-2 text-slate-600 hover:text-slate-800 font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-teal-700 hover:bg-teal-800 text-white font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
+                >
+                  {editingChecklistItem ? 'Save Checklist Changes' : 'Add to Inspection Checklist'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* CHECKLIST ITEM DELETION CONFIRMATION MODAL */}
+      {checklistItemToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-xs p-4 overflow-y-auto animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-6 space-y-4 my-auto">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-red-100 text-red-700 rounded-xl">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-slate-900">Delete Checklist Checkpoint?</h3>
+                <p className="text-xs text-slate-500">Item #{checklistItemToDelete.id}</p>
+              </div>
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-700 space-y-1">
+              <span className="font-semibold block text-slate-900">{checklistItemToDelete.activity}</span>
+              <span className="text-[11px] text-slate-500 block uppercase font-bold">{checklistItemToDelete.category}</span>
+            </div>
+
+            <div className="p-3 bg-red-50 border border-red-200 rounded-xl space-y-2 text-xs">
+              <label className="flex items-center gap-2 cursor-pointer font-semibold text-red-900">
+                <input
+                  type="checkbox"
+                  checked={deleteItemFromAllDays}
+                  onChange={(e) => setDeleteItemFromAllDays(e.target.checked)}
+                  className="w-4 h-4 rounded text-red-600 focus:ring-red-500"
+                />
+                <span>Delete from all 31 days (Monthly template)</span>
+              </label>
+              <p className="text-[11px] text-red-700 pl-6">
+                {deleteItemFromAllDays
+                  ? 'This checkpoint will be removed from all 31 days permanently and synced to Supabase.'
+                  : `Only removes this checkpoint from Day ${selectedInspectionDay}.`}
+              </p>
+            </div>
+
+            <div className="pt-2 flex items-center justify-end gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => setChecklistItemToDelete(null)}
+                className="px-4 py-2 border border-slate-300 text-slate-700 rounded-xl font-semibold hover:bg-slate-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteChecklistItem}
+                className="px-5 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
+              >
+                Confirm Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* STAFF DELETION CONFIRMATION MODAL */}
+      {staffToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-xs p-4 overflow-y-auto animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-6 space-y-4 my-auto">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-red-100 text-red-700 rounded-xl">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-slate-900">Remove Staff Member?</h3>
+                <p className="text-xs text-slate-500">Personnel #{staffToDelete.srNo}</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600">
+              Are you sure you want to remove <strong>{staffToDelete.name}</strong> ({staffToDelete.role} - {staffToDelete.team}) from the active staff roster?
+            </p>
+
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900">
+              This record will be removed from the master roster and deleted from the Supabase staff database.
+            </div>
+
+            <div className="pt-2 flex items-center justify-end gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => setStaffToDelete(null)}
+                className="px-4 py-2 border border-slate-300 text-slate-700 rounded-xl font-semibold hover:bg-slate-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteStaffMember}
+                className="px-5 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
+              >
+                Remove Staff Member
+              </button>
+            </div>
           </div>
         </div>
       )}

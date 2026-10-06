@@ -24,7 +24,6 @@ import {
   ClipboardCheck,
   Receipt,
 } from 'lucide-react';
-import { ProfileEditModal } from './ProfileEditModal';
 
 export const Navbar: React.FC = () => {
   const {
@@ -46,7 +45,6 @@ export const Navbar: React.FC = () => {
 
   const [roleMenuOpen, setRoleMenuOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -332,22 +330,6 @@ export const Navbar: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="px-3 pt-2">
-                        <button
-                          onClick={() => {
-                            setRoleMenuOpen(false);
-                            setIsProfileModalOpen(true);
-                          }}
-                          className="w-full text-left px-3 py-2 text-xs font-semibold text-slate-700 hover:text-teal-900 hover:bg-teal-50 rounded-lg cursor-pointer flex items-center justify-between transition-colors"
-                        >
-                          <span className="flex items-center gap-2">
-                            <Camera className="w-3.5 h-3.5 text-teal-700" />
-                            <span>Edit Profile Photo (Optional)</span>
-                          </span>
-                          <span className="text-[10px] text-teal-600 font-bold">Update</span>
-                        </button>
-                      </div>
-
                       {(role === 'admin' || role === 'mc_member' || role === 'secretary') && (
                         <div className="px-3 pt-1">
                           <button
@@ -461,12 +443,6 @@ export const Navbar: React.FC = () => {
           </div>
         )}
       </div>
-
-      {/* Optional Resident Profile Photo & Settings Modal */}
-      <ProfileEditModal
-        isOpen={isProfileModalOpen}
-        onClose={() => setIsProfileModalOpen(false)}
-      />
     </header>
   );
 };

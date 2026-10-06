@@ -14,6 +14,7 @@ import {
   StaffMember,
   DailyInspectionReport,
   AttendanceCode,
+  InspectionItem,
   MemberProfile,
   Vendor,
   VendorQuote,
@@ -76,11 +77,13 @@ import {
   mapEmergencyContactModelToRow,
   mapGalleryRowToModel,
   mapGalleryModelToRow,
+  uploadToCHSStorage,
 } from '../lib/supabase';
 import {
   fetchStaffDirectory,
   saveStaffMemberToDb,
   deleteStaffMemberFromDb,
+  saveInspection as saveInspectionToDb,
 } from '../services/supervisorService';
 
 interface SocietyContextType {
@@ -109,7 +112,27 @@ interface SocietyContextType {
   setSelectedInspectionDay: (day: number) => void;
   syncInspectionReport: (report: DailyInspectionReport) => void;
   syncDayAttendance: (day: number, records: Record<number, AttendanceCode>) => void;
-  updateInspectionItem: (day: number, itemId: number, status: string, remarks?: string) => void;
+  updateInspectionItem: (day: number, itemId: number, status: string, remarks?: string, photoUrl?: string) => void;
+  addInspectionSitePhoto: (day: number, photoUrl: string) => void;
+  removeInspectionSitePhoto: (day: number, photoUrl: string) => void;
+  setInspectionReportPdfUrl: (day: number, pdfUrl: string) => void;
+  uploadFileToStorage: (
+    file: File | Blob,
+    folder: 'avatars' | 'inspections' | 'reports',
+    customName?: string
+  ) => Promise<{ success: boolean; publicUrl: string; error?: string }>;
+  addInspectionItem: (
+    day: number,
+    itemData: { category: any; activity: string; status?: string; remarks?: string },
+    applyToAllDays?: boolean
+  ) => void;
+  editInspectionItem: (
+    day: number,
+    itemId: number,
+    updates: { category?: any; activity?: string; status?: string; remarks?: string },
+    applyToAllDays?: boolean
+  ) => void;
+  removeInspectionItem: (day: number, itemId: number, applyToAllDays?: boolean) => void;
   submitInspection: (day: number) => void;
   verifyInspection: (day: number, verifiedByAdmin: string, adminComments: string) => void;
   updateAttendance: (staffSrNo: number, day: number, code: AttendanceCode) => void;
@@ -994,7 +1017,7 @@ export const SocietyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const addGalleryItem = async (item: Omit<SocietyGalleryItem, 'id' | 'createdAt'>): Promise<string> => {
-    const newId = `gal-${Date.now()}`;
+    const newId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `gal-${Date.now()}`;
     const newItem: SocietyGalleryItem = {
       ...item,
       id: newId,
@@ -1012,7 +1035,13 @@ export const SocietyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (isSupabaseConfigured) {
       try {
-        await supabase.from('society_gallery').insert([mapGalleryModelToRow(newItem)]);
+        const row = mapGalleryModelToRow(newItem);
+        const { error } = await supabase.from('society_gallery').insert([row]);
+        if (error) {
+          console.warn('[Supabase] Inserting gallery item with custom id failed, trying without explicit id:', error);
+          const { id, ...rowWithoutId } = row;
+          await supabase.from('society_gallery').insert([rowWithoutId]);
+        }
       } catch (err) {
         console.warn('[Supabase] Error inserting gallery item:', err);
       }
@@ -1039,7 +1068,11 @@ export const SocietyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (updates.imageUrl !== undefined) dbUpdates.image_url = updates.imageUrl;
         if (updates.category !== undefined) dbUpdates.category = updates.category;
         if (updates.visibility !== undefined) dbUpdates.visibility = updates.visibility;
-        await supabase.from('society_gallery').update(dbUpdates).eq('id', id);
+        
+        const { error } = await supabase.from('society_gallery').update(dbUpdates).eq('id', id);
+        if (error) {
+          console.warn('[Supabase] Error updating gallery item:', error);
+        }
       } catch (err) {
         console.warn('[Supabase] Error updating gallery item:', err);
       }
@@ -1059,7 +1092,10 @@ export const SocietyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (isSupabaseConfigured) {
       try {
-        await supabase.from('society_gallery').delete().eq('id', id);
+        const { error } = await supabase.from('society_gallery').delete().eq('id', id);
+        if (error) {
+          console.warn('[Supabase] Error deleting gallery item:', error);
+        }
       } catch (err) {
         console.warn('[Supabase] Error deleting gallery item:', err);
       }
@@ -2569,7 +2605,13 @@ export const SocietyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setTankers((prev) => [newTanker, ...prev]);
   };
 
-  const updateInspectionItem = (day: number, itemId: number, status: string, remarks?: string) => {
+  const updateInspectionItem = (
+    day: number,
+    itemId: number,
+    status: string,
+    remarks?: string,
+    photoUrl?: string
+  ) => {
     setInspections((prev) => {
       const existing = prev.find((rep) => rep.day === day);
       if (existing) {
@@ -2579,7 +2621,12 @@ export const SocietyProvider: React.FC<{ children: React.ReactNode }> = ({ child
                 ...rep,
                 items: rep.items.map((it) =>
                   it.id === itemId
-                    ? { ...it, status, ...(remarks !== undefined ? { remarks } : {}) }
+                    ? {
+                        ...it,
+                        status,
+                        ...(remarks !== undefined ? { remarks } : {}),
+                        ...(photoUrl !== undefined ? { photoUrl } : {}),
+                      }
                     : it
                 ),
               }
@@ -2601,10 +2648,157 @@ export const SocietyProvider: React.FC<{ children: React.ReactNode }> = ({ child
             activity: act.activity,
             status: act.id === itemId ? status : act.defaultStatus,
             remarks: act.id === itemId && remarks ? remarks : '',
+            photoUrl: act.id === itemId && photoUrl ? photoUrl : undefined,
           })),
         };
         return [...prev, newReport];
       }
+    });
+  };
+
+  const addInspectionSitePhoto = useCallback((day: number, photoUrl: string) => {
+    setInspections((prev) =>
+      prev.map((rep) => {
+        if (rep.day === day) {
+          const currentPhotos = rep.sitePhotos || [];
+          return {
+            ...rep,
+            sitePhotos: currentPhotos.includes(photoUrl) ? currentPhotos : [...currentPhotos, photoUrl],
+          };
+        }
+        return rep;
+      })
+    );
+  }, []);
+
+  const removeInspectionSitePhoto = useCallback((day: number, photoUrl: string) => {
+    setInspections((prev) =>
+      prev.map((rep) => {
+        if (rep.day === day) {
+          return {
+            ...rep,
+            sitePhotos: (rep.sitePhotos || []).filter((p) => p !== photoUrl),
+          };
+        }
+        return rep;
+      })
+    );
+  }, []);
+
+  const setInspectionReportPdfUrl = useCallback((day: number, pdfUrl: string) => {
+    setInspections((prev) =>
+      prev.map((rep) => (rep.day === day ? { ...rep, pdfReportUrl: pdfUrl } : rep))
+    );
+  }, []);
+
+  const uploadFileToStorage = useCallback(
+    async (
+      file: File | Blob,
+      folder: 'avatars' | 'inspections' | 'reports',
+      customName?: string
+    ) => {
+      return uploadToCHSStorage(file, folder, customName);
+    },
+    []
+  );
+
+  const addInspectionItem = (
+    day: number,
+    itemData: { category: any; activity: string; status?: string; remarks?: string },
+    applyToAllDays: boolean = false
+  ) => {
+    setInspections((prev) => {
+      let maxId = 0;
+      prev.forEach((r) => {
+        r.items.forEach((it) => {
+          if (it.id > maxId) maxId = it.id;
+        });
+      });
+      const newItemId = maxId + 1;
+      const newItem: InspectionItem = {
+        id: newItemId,
+        category: itemData.category || 'UTILITIES & INFRASTRUCTURE',
+        activity: itemData.activity.trim(),
+        status: itemData.status || 'Working OK',
+        remarks: itemData.remarks || '',
+      };
+
+      const updated = applyToAllDays
+        ? prev.map((r) => {
+            const nextReport = { ...r, items: [...r.items, { ...newItem }] };
+            saveInspectionToDb(nextReport).catch(() => {});
+            return nextReport;
+          })
+        : prev.map((r) => {
+            if (r.day === day) {
+              const nextReport = { ...r, items: [...r.items, newItem] };
+              saveInspectionToDb(nextReport).catch(() => {});
+              return nextReport;
+            }
+            return r;
+          });
+      return updated;
+    });
+  };
+
+  const editInspectionItem = (
+    day: number,
+    itemId: number,
+    updates: { category?: any; activity?: string; status?: string; remarks?: string },
+    applyToAllDays: boolean = false
+  ) => {
+    setInspections((prev) => {
+      const updated = applyToAllDays
+        ? prev.map((r) => {
+            const nextReport = {
+              ...r,
+              items: r.items.map((it) => (it.id === itemId ? { ...it, ...updates } : it)),
+            };
+            saveInspectionToDb(nextReport).catch(() => {});
+            return nextReport;
+          })
+        : prev.map((r) => {
+            if (r.day === day) {
+              const nextReport = {
+                ...r,
+                items: r.items.map((it) => (it.id === itemId ? { ...it, ...updates } : it)),
+              };
+              saveInspectionToDb(nextReport).catch(() => {});
+              return nextReport;
+            }
+            return r;
+          });
+      return updated;
+    });
+  };
+
+  const removeInspectionItem = (
+    day: number,
+    itemId: number,
+    applyToAllDays: boolean = false
+  ) => {
+    setInspections((prev) => {
+      const updated = applyToAllDays
+        ? prev.map((r) => {
+            const nextReport = {
+              ...r,
+              items: r.items.filter((it) => it.id !== itemId),
+            };
+            saveInspectionToDb(nextReport).catch(() => {});
+            return nextReport;
+          })
+        : prev.map((r) => {
+            if (r.day === day) {
+              const nextReport = {
+                ...r,
+                items: r.items.filter((it) => it.id !== itemId),
+              };
+              saveInspectionToDb(nextReport).catch(() => {});
+              return nextReport;
+            }
+            return r;
+          });
+      return updated;
     });
   };
 
@@ -2747,6 +2941,13 @@ export const SocietyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         syncInspectionReport,
         syncDayAttendance,
         updateInspectionItem,
+        addInspectionSitePhoto,
+        removeInspectionSitePhoto,
+        setInspectionReportPdfUrl,
+        uploadFileToStorage,
+        addInspectionItem,
+        editInspectionItem,
+        removeInspectionItem,
         submitInspection,
         verifyInspection,
         updateAttendance,
