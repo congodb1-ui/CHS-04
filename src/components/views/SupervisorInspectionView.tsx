@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSociety } from '../../context/SocietyContext';
 import {
   ClipboardCheck,
@@ -24,14 +24,24 @@ import {
   Plus,
   Edit2,
   Trash2,
+  Loader2,
 } from 'lucide-react';
 import { AttendanceCode, StaffMember } from '../../types';
+import {
+  fetchInspectionByDay,
+  fetchAttendanceByDay,
+  saveInspection,
+  updateStaffAttendance,
+  bulkMarkAttendance as bulkMarkAttendanceInDb,
+} from '../../services/supervisorService';
 
 export const SupervisorInspectionView: React.FC = () => {
   const {
     inspections,
     selectedInspectionDay,
     setSelectedInspectionDay,
+    syncInspectionReport,
+    syncDayAttendance,
     updateInspectionItem,
     submitInspection,
     verifyInspection,
@@ -53,6 +63,13 @@ export const SupervisorInspectionView: React.FC = () => {
   const [adminCommentInput, setAdminCommentInput] = useState('');
   const [escalatedMap, setEscalatedMap] = useState<Record<number, string>>({});
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
+
+  // Async Database Operations Loading States
+  const [isFetchingDay, setIsFetchingDay] = useState<boolean>(false);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isVerifying, setIsVerifying] = useState<boolean>(false);
+  const [updatingStaffSrNo, setUpdatingStaffSrNo] = useState<number | null>(null);
+  const [isBulkMarking, setIsBulkMarking] = useState<boolean>(false);
 
   // Staff Modal Management State
   const [showStaffModal, setShowStaffModal] = useState<boolean>(false);
@@ -79,6 +96,42 @@ export const SupervisorInspectionView: React.FC = () => {
   // Can edit only if not locked, and user is supervisor or admin
   const canEditInspection = (role === 'supervisor' || role === 'admin') && !isChecklistLocked;
 
+  // Automatically fetch live checklist and attendance data from Supabase whenever selectedInspectionDay changes
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadDayData() {
+      setIsFetchingDay(true);
+      try {
+        const [remoteReport, remoteAttendance] = await Promise.all([
+          fetchInspectionByDay(selectedInspectionDay),
+          fetchAttendanceByDay(selectedInspectionDay),
+        ]);
+
+        if (isCancelled) return;
+
+        if (remoteReport) {
+          syncInspectionReport(remoteReport);
+        }
+        if (remoteAttendance && Object.keys(remoteAttendance).length > 0) {
+          syncDayAttendance(selectedInspectionDay, remoteAttendance);
+        }
+      } catch (err) {
+        console.warn(`[SupervisorInspectionView] Error fetching day ${selectedInspectionDay} from Supabase:`, err);
+      } finally {
+        if (!isCancelled) {
+          setIsFetchingDay(false);
+        }
+      }
+    }
+
+    loadDayData();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedInspectionDay, syncInspectionReport, syncDayAttendance]);
+
   const filteredItems = currentReport.items.filter((item) => {
     if (categoryFilter === 'All') return true;
     return item.category === categoryFilter;
@@ -98,9 +151,132 @@ export const SupervisorInspectionView: React.FC = () => {
     setEscalatedMap((prev) => ({ ...prev, [item.id]: tktId }));
   };
 
-  const handleVerify = () => {
-    verifyInspection(selectedInspectionDay, 'Soleha Khan (Estate Admin)', adminCommentInput || 'Verified and verified on physical walkthrough.');
+  // Persists item changes to state and Supabase operations schema
+  const handleChecklistItemChange = async (itemId: number, newStatus: string, newRemarks?: string) => {
+    updateInspectionItem(selectedInspectionDay, itemId, newStatus, newRemarks);
+    try {
+      const updatedItems = currentReport.items.map((it) =>
+        it.id === itemId
+          ? { ...it, status: newStatus, remarks: newRemarks !== undefined ? newRemarks : it.remarks }
+          : it
+      );
+      await saveInspection({
+        ...currentReport,
+        items: updatedItems,
+      });
+    } catch (err) {
+      console.warn('[SupervisorInspectionView] Error auto-syncing checklist item:', err);
+    }
+  };
+
+  // Handles Supervisor submission to Estate Office & Supabase
+  const handleSubmit = async () => {
+    setIsSubmitting(true);
+    const now = new Date();
+    const timeStr = `${now.toISOString().split('T')[0]} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+    // 1. Update UI Context
+    submitInspection(selectedInspectionDay);
+
+    // 2. Persist to Supabase operations.supervisor_inspections
+    try {
+      const updatedReport = {
+        ...currentReport,
+        isSubmitted: true,
+        submittedAt: timeStr,
+      };
+      const res = await saveInspection(updatedReport);
+      if (res.success) {
+        setSyncStatus(`✓ Day ${selectedInspectionDay} checklist submitted & synced to Supabase operations schema!`);
+      } else {
+        setSyncStatus(`⚠️ Submitted locally. Supabase note: ${res.error}`);
+      }
+    } catch (err: any) {
+      console.warn('[SupervisorInspectionView] Error submitting checklist to Supabase:', err);
+      setSyncStatus(`⚠️ Submitted locally (offline mode).`);
+    } finally {
+      setIsSubmitting(false);
+      setTimeout(() => setSyncStatus(null), 5000);
+    }
+  };
+
+  // Handles Admin Verification & Signoff to Supabase
+  const handleVerify = async () => {
+    setIsVerifying(true);
+    const adminName = 'Soleha Khan (Estate Admin)';
+    const comment = adminCommentInput || 'Verified and verified on physical walkthrough.';
+    const now = new Date();
+    const timeStr = `${now.toISOString().split('T')[0]} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+    // 1. Update UI Context
+    verifyInspection(selectedInspectionDay, adminName, comment);
     setAdminCommentInput('');
+
+    // 2. Persist to Supabase operations.supervisor_inspections
+    try {
+      const updatedReport = {
+        ...currentReport,
+        isVerified: true,
+        verifiedByAdmin: adminName,
+        adminComments: comment,
+        verifiedAt: timeStr,
+      };
+      const res = await saveInspection(updatedReport);
+      if (res.success) {
+        setSyncStatus(`✓ Day ${selectedInspectionDay} checklist verified & permanently locked in Supabase operations schema!`);
+      } else {
+        setSyncStatus(`⚠️ Verified locally. Supabase note: ${res.error}`);
+      }
+    } catch (err: any) {
+      console.warn('[SupervisorInspectionView] Error verifying checklist in Supabase:', err);
+      setSyncStatus(`⚠️ Verified locally (offline mode).`);
+    } finally {
+      setIsVerifying(false);
+      setTimeout(() => setSyncStatus(null), 5000);
+    }
+  };
+
+  // Handles individual staff attendance change
+  const handleAttendanceChange = async (staffSrNo: number, code: AttendanceCode) => {
+    setUpdatingStaffSrNo(staffSrNo);
+    // Immediate UI update
+    updateAttendance(staffSrNo, selectedInspectionDay, code);
+
+    // Asynchronous Supabase persistence
+    try {
+      const res = await updateStaffAttendance(staffSrNo, selectedInspectionDay, code, 'Supervisor Parvez');
+      if (!res.success) {
+        console.warn(`[Supabase] Staff attendance sync warning:`, res.error);
+      }
+    } catch (err) {
+      console.warn(`[Supabase] Staff attendance sync failed:`, err);
+    } finally {
+      setUpdatingStaffSrNo(null);
+    }
+  };
+
+  // Handles bulk mark all present
+  const handleBulkMarkPresent = async () => {
+    setIsBulkMarking(true);
+    // Immediate UI update
+    bulkMarkAttendance(selectedInspectionDay, 'P');
+
+    // Asynchronous Supabase persistence
+    try {
+      const staffSrNos = staffList.map((s) => s.srNo);
+      const res = await bulkMarkAttendanceInDb(selectedInspectionDay, staffSrNos, 'P', 'Supervisor Parvez');
+      if (res.success) {
+        setSyncStatus(`✓ All ${staffList.length} staff marked Present in Supabase operations.staff_attendance!`);
+      } else {
+        setSyncStatus(`⚠️ Attendance updated locally. Supabase note: ${res.error}`);
+      }
+    } catch (err) {
+      console.warn(`[Supabase] Bulk mark attendance failed:`, err);
+      setSyncStatus(`⚠️ Attendance updated locally (offline mode).`);
+    } finally {
+      setIsBulkMarking(false);
+      setTimeout(() => setSyncStatus(null), 4000);
+    }
   };
 
   const exportCsv = () => {
@@ -232,8 +408,10 @@ export const SupervisorInspectionView: React.FC = () => {
             <span className="font-bold text-slate-700 uppercase tracking-wider text-[11px]">
               31-Day Daily Inspection Checklist Index:
             </span>
-            <span className="text-slate-500 tabular-nums">
-              Selected: <strong>Day {selectedInspectionDay} ({currentReport.date})</strong>
+            <span className="text-slate-500 tabular-nums flex items-center gap-1.5">
+              {isFetchingDay && <Loader2 className="w-3.5 h-3.5 animate-spin text-teal-600 inline" />}
+              <span>Selected: <strong>Day {selectedInspectionDay} ({currentReport.date})</strong></span>
+              {isFetchingDay && <span className="text-[10px] text-teal-700 font-semibold bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">Syncing with DB...</span>}
             </span>
           </div>
 
@@ -414,7 +592,7 @@ export const SupervisorInspectionView: React.FC = () => {
                             /* Interactive status selector for Supervisor */
                             <select
                               value={item.status}
-                              onChange={(e) => updateInspectionItem(selectedInspectionDay, item.id, e.target.value)}
+                              onChange={(e) => handleChecklistItemChange(item.id, e.target.value)}
                               className={`w-full text-xs p-1.5 rounded-lg border font-semibold ${
                                 isIssue
                                   ? 'bg-red-50 border-red-300 text-red-800'
@@ -452,7 +630,7 @@ export const SupervisorInspectionView: React.FC = () => {
                               type="text"
                               value={item.remarks}
                               placeholder="Add defect notes or observations..."
-                              onChange={(e) => updateInspectionItem(selectedInspectionDay, item.id, item.status, e.target.value)}
+                              onChange={(e) => handleChecklistItemChange(item.id, item.status, e.target.value)}
                               className="w-full text-xs p-1.5 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-teal-600"
                             />
                           ) : (
@@ -508,15 +686,24 @@ export const SupervisorInspectionView: React.FC = () => {
                 </div>
                 {!currentReport.isSubmitted && (
                   <button
-                    onClick={() => submitInspection(selectedInspectionDay)}
-                    className="w-full py-2 bg-teal-700 hover:bg-teal-800 text-white font-semibold rounded-lg transition-colors cursor-pointer mt-2"
+                    onClick={handleSubmit}
+                    disabled={isSubmitting}
+                    className="w-full py-2 bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white font-semibold rounded-lg transition-colors cursor-pointer mt-2 flex items-center justify-center gap-1.5"
                   >
-                    Submit Day {selectedInspectionDay} Checklist for Admin Verification
+                    {isSubmitting ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Submitting to Supabase Operations...</span>
+                      </>
+                    ) : (
+                      <span>Submit Day {selectedInspectionDay} Checklist for Admin Verification</span>
+                    )}
                   </button>
                 )}
                 {currentReport.isSubmitted && (
-                  <div className="p-2 bg-teal-50 border border-teal-200 text-teal-800 rounded font-semibold text-center">
-                    ✓ Submitted to Estate Office on {currentReport.submittedAt}
+                  <div className="p-2 bg-teal-50 border border-teal-200 text-teal-800 rounded font-semibold text-center flex items-center justify-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-teal-600" />
+                    <span>Submitted to Estate Office on {currentReport.submittedAt}</span>
                   </div>
                 )}
               </div>
@@ -558,10 +745,20 @@ export const SupervisorInspectionView: React.FC = () => {
                     />
                     <button
                       onClick={handleVerify}
-                      className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-lg transition-colors cursor-pointer text-xs flex items-center justify-center gap-1.5 shadow-xs"
+                      disabled={isVerifying}
+                      className="w-full py-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-semibold rounded-lg transition-colors cursor-pointer text-xs flex items-center justify-center gap-1.5 shadow-xs"
                     >
-                      <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
-                      <span>Verify & Sign Off Day {selectedInspectionDay} Checklist</span>
+                      {isVerifying ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-teal-400" />
+                          <span>Persisting Signoff to Supabase...</span>
+                        </>
+                      ) : (
+                        <>
+                          <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
+                          <span>Verify & Sign Off Day {selectedInspectionDay} Checklist</span>
+                        </>
+                      )}
                     </button>
                   </div>
                 ) : (
@@ -614,10 +811,12 @@ export const SupervisorInspectionView: React.FC = () => {
 
               {canEditInspection ? (
                 <button
-                  onClick={() => bulkMarkAttendance(selectedInspectionDay, 'P')}
-                  className="px-3 py-1.5 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                  onClick={handleBulkMarkPresent}
+                  disabled={isBulkMarking}
+                  className="px-3 py-1.5 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50 border border-emerald-200 rounded-lg text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1.5"
                 >
-                  Mark All Present (P)
+                  {isBulkMarking && <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-700" />}
+                  <span>{isBulkMarking ? 'Persisting to Database...' : 'Mark All Present (P)'}</span>
                 </button>
               ) : (
                 <span className="text-[11px] text-slate-500 font-medium">
@@ -693,11 +892,13 @@ export const SupervisorInspectionView: React.FC = () => {
                         <div className="inline-flex items-center gap-1">
                           {(['P', 'A', 'WO', 'HD', 'L'] as AttendanceCode[]).map((code) => {
                             const isCurrent = staff.code === code;
+                            const isRowUpdating = updatingStaffSrNo === staff.srNo;
                             return (
                               <button
                                 key={code}
-                                onClick={() => updateAttendance(staff.srNo, selectedInspectionDay, code)}
-                                className={`w-7 h-7 rounded text-[11px] font-bold transition-colors cursor-pointer ${
+                                disabled={isRowUpdating}
+                                onClick={() => handleAttendanceChange(staff.srNo, code)}
+                                className={`w-7 h-7 rounded text-[11px] font-bold transition-colors cursor-pointer disabled:opacity-60 flex items-center justify-center ${
                                   isCurrent
                                     ? code === 'P'
                                       ? 'bg-emerald-600 text-white'
@@ -711,7 +912,11 @@ export const SupervisorInspectionView: React.FC = () => {
                                     : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
                                 }`}
                               >
-                                {code}
+                                {isRowUpdating && isCurrent ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  code
+                                )}
                               </button>
                             );
                           })}

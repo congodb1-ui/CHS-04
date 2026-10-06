@@ -102,6 +102,8 @@ interface SocietyContextType {
   attendance: Record<number, Record<number, AttendanceCode>>;
   selectedInspectionDay: number;
   setSelectedInspectionDay: (day: number) => void;
+  syncInspectionReport: (report: DailyInspectionReport) => void;
+  syncDayAttendance: (day: number, records: Record<number, AttendanceCode>) => void;
   updateInspectionItem: (day: number, itemId: number, status: string, remarks?: string) => void;
   submitInspection: (day: number) => void;
   verifyInspection: (day: number, verifiedByAdmin: string, adminComments: string) => void;
@@ -2571,6 +2573,30 @@ export const SocietyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
   };
 
+  const syncInspectionReport = useCallback((report: DailyInspectionReport) => {
+    setInspections((prev) => {
+      const exists = prev.some((r) => r.day === report.day);
+      if (exists) {
+        return prev.map((r) => (r.day === report.day ? { ...r, ...report } : r));
+      }
+      return [...prev, report];
+    });
+  }, []);
+
+  const syncDayAttendance = useCallback((day: number, records: Record<number, AttendanceCode>) => {
+    setAttendance((prev) => {
+      const next = { ...prev };
+      Object.entries(records).forEach(([srNoStr, code]) => {
+        const srNo = Number(srNoStr);
+        next[srNo] = {
+          ...(next[srNo] || {}),
+          [day]: code,
+        };
+      });
+      return next;
+    });
+  }, []);
+
   const submitInspection = (day: number) => {
     const now = new Date();
     const timeStr = `${now.toISOString().split('T')[0]} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -2683,6 +2709,8 @@ export const SocietyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         attendance,
         selectedInspectionDay,
         setSelectedInspectionDay,
+        syncInspectionReport,
+        syncDayAttendance,
         updateInspectionItem,
         submitInspection,
         verifyInspection,
