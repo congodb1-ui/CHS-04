@@ -282,6 +282,7 @@ export interface StaffMember {
   role: string;
   shift: string;
   status: 'Active' | 'Inactive' | 'On Leave' | 'Reliever';
+  phone?: string;
 }
 
 export type AttendanceCode = 'P' | 'A' | 'L' | 'HD' | 'WO' | '';

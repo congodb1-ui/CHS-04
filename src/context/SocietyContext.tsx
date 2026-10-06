@@ -77,6 +77,11 @@ import {
   mapGalleryRowToModel,
   mapGalleryModelToRow,
 } from '../lib/supabase';
+import {
+  fetchStaffDirectory,
+  saveStaffMemberToDb,
+  deleteStaffMemberFromDb,
+} from '../services/supervisorService';
 
 interface SocietyContextType {
   role: UserRole;
@@ -669,16 +674,31 @@ export const SocietyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setStaffList((prev) => {
       const maxSr = prev.reduce((acc, curr) => Math.max(acc, curr.srNo), 0);
       const newStaff: StaffMember = { ...staff, srNo: maxSr + 1 };
+      saveStaffMemberToDb(newStaff).catch((err) =>
+        console.warn('[Supabase Operations] Error saving new staff to DB:', err)
+      );
       return [...prev, newStaff];
     });
   }, []);
 
   const updateStaffMember = useCallback((srNo: number, updates: Partial<StaffMember>) => {
-    setStaffList((prev) => prev.map((s) => (s.srNo === srNo ? { ...s, ...updates } : s)));
+    setStaffList((prev) => {
+      const updatedList = prev.map((s) => (s.srNo === srNo ? { ...s, ...updates } : s));
+      const target = updatedList.find((s) => s.srNo === srNo);
+      if (target) {
+        saveStaffMemberToDb(target).catch((err) =>
+          console.warn('[Supabase Operations] Error updating staff in DB:', err)
+        );
+      }
+      return updatedList;
+    });
   }, []);
 
   const deleteStaffMember = useCallback((srNo: number) => {
     setStaffList((prev) => prev.filter((s) => s.srNo !== srNo));
+    deleteStaffMemberFromDb(srNo).catch((err) =>
+      console.warn('[Supabase Operations] Error deleting staff from DB:', err)
+    );
   }, []);
 
   // Maintenance & Dues state with localStorage
@@ -982,7 +1002,11 @@ export const SocietyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
     setGalleryItems((prev) => {
       const updated = [newItem, ...prev];
-      localStorage.setItem('solitaire_gallery_items_v1', JSON.stringify(updated));
+      try {
+        localStorage.setItem('solitaire_gallery_items_v1', JSON.stringify(updated));
+      } catch (err) {
+        console.warn('LocalStorage quota warning for gallery items:', err);
+      }
       return updated;
     });
 
@@ -999,7 +1023,11 @@ export const SocietyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const updateGalleryItem = async (id: string, updates: Partial<SocietyGalleryItem>) => {
     setGalleryItems((prev) => {
       const updated = prev.map((item) => (item.id === id ? { ...item, ...updates } : item));
-      localStorage.setItem('solitaire_gallery_items_v1', JSON.stringify(updated));
+      try {
+        localStorage.setItem('solitaire_gallery_items_v1', JSON.stringify(updated));
+      } catch (err) {
+        console.warn('LocalStorage quota warning for gallery items:', err);
+      }
       return updated;
     });
 
@@ -1021,7 +1049,11 @@ export const SocietyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const deleteGalleryItem = async (id: string) => {
     setGalleryItems((prev) => {
       const updated = prev.filter((item) => item.id !== id);
-      localStorage.setItem('solitaire_gallery_items_v1', JSON.stringify(updated));
+      try {
+        localStorage.setItem('solitaire_gallery_items_v1', JSON.stringify(updated));
+      } catch (err) {
+        console.warn('LocalStorage quota warning for gallery items:', err);
+      }
       return updated;
     });
 
@@ -1043,6 +1075,9 @@ export const SocietyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       fetchProcurementFromSupabase();
       fetchEmergencyContacts();
       fetchGalleryItems();
+      fetchStaffDirectory().then((staff) => {
+        if (staff && staff.length > 0) setStaffList(staff);
+      });
     }
   }, [
     fetchMembersFromSupabase,

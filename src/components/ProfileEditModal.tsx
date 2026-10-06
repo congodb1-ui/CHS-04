@@ -12,6 +12,7 @@ import {
   Mail,
   Save,
 } from 'lucide-react';
+import { compressImageFile, validateImageFile } from '../lib/imageUtils';
 
 interface ProfileEditModalProps {
   isOpen: boolean;
@@ -39,22 +40,20 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({ isOpen, onCl
 
   const [isDragging, setIsDragging] = useState(false);
 
-  const processFile = (file: File) => {
-    const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/svg+xml', 'image/jpg'];
-    if (!validTypes.includes(file.type) && !file.name.match(/\.(jpg|jpeg|png|webp|svg)$/i)) {
-      setErrorMsg('Please upload a valid image file (.jpg, .jpeg, .png, .webp, or .svg).');
+  const processFile = async (file: File) => {
+    const val = validateImageFile(file);
+    if (!val.valid) {
+      setErrorMsg(val.error || 'Please upload a valid image file.');
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      setErrorMsg('File size exceeds 5MB limit. Please choose a smaller image.');
-      return;
-    }
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setAvatarUrl(reader.result as string);
+
+    try {
+      const compressed = await compressImageFile(file, { maxWidth: 600, maxHeight: 600, quality: 0.85 });
+      setAvatarUrl(compressed);
       setErrorMsg(null);
-    };
-    reader.readAsDataURL(file);
+    } catch {
+      setErrorMsg('Failed to process image file. Please try another image.');
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -193,7 +192,7 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({ isOpen, onCl
 
               <div className="flex-1 space-y-2">
                 <input
-                  type="url"
+                  type="text"
                   placeholder="Paste image URL (https://...)"
                   value={avatarUrl}
                   onChange={(e) => setAvatarUrl(e.target.value)}

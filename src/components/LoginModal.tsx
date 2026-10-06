@@ -20,6 +20,7 @@ import {
   Upload,
 } from 'lucide-react';
 import { ALL_SOCIETY_FLATS } from '../types';
+import { compressImageFile } from '../lib/imageUtils';
 
 export const LoginModal: React.FC = () => {
   const {
@@ -140,14 +141,15 @@ export const LoginModal: React.FC = () => {
     }
   };
 
-  const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setRegAvatarUrl(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      try {
+        const compressed = await compressImageFile(file, { maxWidth: 600, maxHeight: 600, quality: 0.85 });
+        setRegAvatarUrl(compressed);
+      } catch (err) {
+        console.warn('Failed to compress avatar:', err);
+      }
     }
   };
 
@@ -657,7 +659,7 @@ export const LoginModal: React.FC = () => {
 
                   <div className="flex-1 space-y-1.5">
                     <input
-                      type="url"
+                      type="text"
                       placeholder="Paste image URL (https://...)"
                       value={regAvatarUrl}
                       onChange={(e) => setRegAvatarUrl(e.target.value)}
